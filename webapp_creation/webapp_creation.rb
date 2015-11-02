@@ -4,35 +4,18 @@ require 'faraday'
 require 'json'
 require 'yaml'
 
-class Webapps
-  attr_accessor :arguments, :database, :file
-
+class CreateWebapps
   def initialize
-    abort "Incorrect argument. Use 'create' to create webapps or 'delete' to delete them." unless %w('create', 'delete').include? ARGV[0]
-    @config  = YAML.load_file('config.yml')
-    @webapps = read_webapps_from_file
+    @config = YAML.load_file('config.yml')
+    read_template
+    read_webapps if @app_template['domain'] == 'file'
+
     @connection = Faraday.new(url: @config['dojo_url'])
 
-    case ARGV[0]
-    when 'create'
-      create_webapps
-    when 'delete'
-      delete_webapps
-    end
+    create_webapps
   end
 
   private
-
-  def read_webapps_from_file
-    words = []
-    text = File.open('webapps.txt').read
-    text.gsub!(/\r\n?/, "\n")
-    text.each_line do |line|
-      words << line.chomp
-    end
-
-    words
-  end
 
   def create_webapps
     @webapps.each do |webapp|
@@ -41,45 +24,38 @@ class Webapps
         puts "Created webapp: #{webapp}"
       else
         puts "Error creating webapp: #{webapp}, response status: #{@response[:status]}, response body: #{@response[:body]}"
-        puts 'Exiting.'
-        break
+        abort 'Exiting.'
       end
     end
-  end
-
-  def delete_webapps
-    @webapps.each do |webapp|
-      webapp_id = find_id(webapp)
-      request('delete', "api/v2/webapps/#{webapp_id}", {})
-      if @response[:status].to_s == '202'
-        puts "Deleted webapp: #{webapp}"
-      else
-        puts "Error deleting webapp: #{webapp}, response status: #{@response[:status]}, response body: #{@response[:body]}"
-        puts 'Exiting.'
-        break
-      end
-    end
-  end
-
-  def find_id(domain)
-    app_list = request('get', 'api/v2/webapps', {})
-    selected_app = app_list[:body].select { |app| app['domain'].include?(domain) }
-    selected_app_id = selected_app.any? ? selected_app[0]['id'] : nil
-
-    selected_app_id
+    puts 'Done creating webapps.'
   end
 
   def hash(domain)
-    hash = { domain: domain,
-      origin_servers: [{ ip: @config['origin_server_ip'],
-                         port: @config['origin_server_port'],
-                         weight: @config['origin_server_weight'] }]
-    }
-    if @config['base_domain_redirect_from']
-      hash[:base_domain_redirect_from] = domain.gsub(/^(https?:\/\/)?(www\.)?/, '')
+    hash = @app_template.dup
+    hash['domain'] = domain
+    if @app_template['base_domain_redirect_from'] == 'www'
+      hash['base_domain_redirect_from'] = domain.gsub(%r{^(https?:\/\/)?(www\.)?}, '')
     end
 
     hash
+  end
+
+  def read_template
+    abort 'webapp_template.json cannot be found' unless File.file?('webapp_template.json')
+    @app_template = JSON.parse(File.read('webapp_template.json'))
+    @webapps = [@app_template['domain']]
+  end
+
+  def read_webapps
+    abort 'webapps.txt cannot be found' unless File.file?('webapps.txt')
+    @webapps = []
+    text = File.open('webapps.txt').read
+    text.gsub!(/\r\n?/, "\n")
+    text.each_line do |line|
+      @webapps << line.chomp
+    end
+
+    @webapps
   end
 
   def request(method, path, hash: {})
@@ -124,4 +100,4 @@ class Webapps
   end
 end
 
-Webapps.new
+CreateWebapps.new
